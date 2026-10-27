@@ -56,7 +56,26 @@ The only routes are `POST /v1/chat` and `GET /v1/traces/{trace_id}`.
 pytest
 ```
 
-The suite uses a fake LLM and a fake web lookup. It does not call OpenAI, Open-Meteo, or Frankfurter. Contract, routing, retrieval, guardrail, and the ten-scenario evaluation set are included.
+The suite uses a fake LLM and a fake web lookup. It does not call OpenAI, Open-Meteo, or Frankfurter. Contract, routing, retrieval, guardrail, and the ten-scenario evaluation set are included. `GETNET_INGEST` is forced off so the suite stays offline and reads the corpus already on disk.
+
+### End-to-end integration test plan
+
+This is the live path, from the HTTP entry point through every agent. The automated suite above is the same `POST /v1/chat` stack with fakes. A release check repeats it against a running server.
+
+1. Ingest. `python -m app.rag.ingest` downloads `https://www.getnet.net/` and `https://www.getnet.net/en` and writes `data/corpus/getnet-root.md` and `data/corpus/getnet-en.md`. Confirm both files exist and that each front-matter `url` is one of those two addresses.
+2. Boot. `docker compose up --build` with `GETNET_INGEST=1` (the compose default). Startup downloads those two pages again, then builds the index. If the download fails, the process logs a warning and serves the files already in the image.
+3. Drive `POST /v1/chat` with `{"message", "user_id"}`, then `GET /v1/traces/{trace_id}` for the same `trace_id`. Check one case per specialist:
+
+| Case | Message | Route | What to assert |
+| --- | --- | --- | --- |
+| Product | Difference between Get Clássica and Get Smart | guardrail, router, knowledge | `sources` cite a Getnet URL. No support tool. |
+| Account | When yesterday's sales are deposited | guardrail, router, support | Tool `get_receivables`. Trace has no amount. |
+| Terminal | Card machine will not connect | guardrail, router, support | Tool `diagnose_terminal`. |
+| General | Weather in Porto Alegre, and the euro rate | guardrail, router, knowledge | Tool `web_search`. `sources` is empty. |
+| Guardrail | Instruction override, or another customer's data | guardrail | `outcome` `refused`. Route does not continue. No tool. |
+| Handoff | Ask for a person | guardrail, router, escalation | `outcome` `handoff`. Reference matches `ESC-` plus 8 characters. |
+
+4. Repeat the ten messages in `data/evaluation.yaml` against `localhost:8000`. Each reply's route, tools, and sources must match that file. The trace for every reply must carry intent, outcome, and latency.
 
 ## Orchestration
 
@@ -93,11 +112,18 @@ POST /v1/chat
 
 ## RAG pipeline
 
-Ingestion is offline. `data/corpus/*.md` holds original summaries of public Getnet pages, each with `title` and `url` in front matter. The files are not copies of the pages. Fees that the pages say can change are not treated as permanent numbers.
+Ingestion downloads the two URLs named in the brief and stores the visible page text:
 
-Sources used for the summaries:
+```bash
+python -m app.rag.ingest
+```
 
-- https://www.getnet.net/en
+`app/rag/ingest.py` fetches `https://www.getnet.net/` and `https://www.getnet.net/en`, strips scripts and styles, and writes `data/corpus/getnet-root.md` and `data/corpus/getnet-en.md` with `title` and `url` front matter. Those two files keep the requested URL even when the site redirects both to the same English home page. With `GETNET_INGEST=1` (the default for `docker compose` and for `Settings.from_env`), the service runs that download again at startup before it builds the index. `GETNET_INGEST=0` skips the download and uses the files already on disk.
+
+The other corpus files are additional public sources, kept as short summaries so Brazilian product rules stay in the index without copying those pages. Fees that the pages say can change are not treated as permanent numbers.
+
+Additional sources:
+
 - https://site.getnet.com.br/maquininha/get-classica/
 - https://site.getnet.com.br/maquininha/get-smart/
 - https://site.getnet.com.br/pagamentos-digitais/

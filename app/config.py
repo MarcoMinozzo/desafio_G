@@ -17,6 +17,7 @@ class Settings:
     corpus_dir: Path
     merchants_path: Path
     chroma_dir: Path
+    ingest_on_start: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -27,4 +28,5 @@ class Settings:
             corpus_dir=ROOT / "data" / "corpus",
             merchants_path=ROOT / "data" / "merchants.json",
             chroma_dir=ROOT / "data" / ".chroma",
+            ingest_on_start=os.getenv("GETNET_INGEST", "1").strip() != "0",
         )

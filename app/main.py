@@ -14,6 +14,7 @@ from app.domain.models import ChatRequest, Reply, ReviewRecord
 from app.llm.client import LLMClient, build_llm
 from app.orchestration.service import build_service
 from app.rag.corpus import load_corpus
+from app.rag.ingest import ingest_specified_urls
 from app.rag.retriever import build_retriever
 from app.tools.store import load_merchants
 from app.tools.web_search import HttpWebSearch, WebSearch
@@ -28,6 +29,14 @@ def create_app(
     web_search: WebSearch | None = None,
 ) -> FastAPI:
     resolved = settings or Settings.from_env()
+    if resolved.ingest_on_start:
+        try:
+            ingest_specified_urls(resolved.corpus_dir)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not download the Getnet pages; using the corpus already on disk",
+                exc_info=True,
+            )
     documents = load_corpus(resolved.corpus_dir)
     retriever = build_retriever(documents, resolved)
     model = llm if llm is not None else build_llm(

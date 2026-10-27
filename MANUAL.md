@@ -233,7 +233,7 @@ url: https://site.getnet.com.br/link-de-pagamento/
 ---
 ```
 
-[app/rag/corpus.py](app/rag/corpus.py) uses the file name without `.md` as the document id, then the title, URL, and body. The body is an original English summary of a public page. It is not a copy of the page. Promotional rates that the sites say can change are not copied in as permanent numbers.
+[app/rag/corpus.py](app/rag/corpus.py) uses the file name without `.md` as the document id, then the title, URL, and body. `getnet-root.md` and `getnet-en.md` are the visible text of the two brief URLs, written by `python -m app.rag.ingest`. The other bodies are original English summaries of public Brazilian pages. Promotional rates that the sites say can change are not copied in as permanent numbers.
 
 | File | Question it is meant to answer |
 | --- | --- |
@@ -244,7 +244,8 @@ url: https://site.getnet.com.br/link-de-pagamento/
 | `crediario.md` | How many installments crediario can offer |
 | `payment-link.md` | Whether a Payment Link can be sent through WhatsApp |
 | `terminal-help.md` | What the public manual says about connectivity |
-| `getnet-overview.md` | The global company page, which does not state Brazilian product rules |
+| `getnet-root.md` | Downloaded text of https://www.getnet.net/ |
+| `getnet-en.md` | Downloaded text of https://www.getnet.net/en |
 
 The URLs in front matter are the citations. Paths on `site.getnet.com.br` stay as published addresses even though the summary text is English.
 

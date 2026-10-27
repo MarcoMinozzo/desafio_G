@@ -48,8 +48,8 @@
 - **Rationale**: Meets the operator story and the constitution log rule without a dashboard.
 - **Alternatives considered**: OpenTelemetry in the core image. Described in the README as the production step, not built, per the approved scope.
 
-## Decision: Corpus is an original summary, not a page dump
+## Decision: Specified URLs are downloaded; other topics stay summaries
 
-- **Decision**: `data/corpus/*.md` files are short original summaries of public Getnet topics, each with `title` and `url` front matter pointing at https://www.getnet.net/ or https://www.getnet.net/en. They do not copy site pages verbatim and they do not state fees or installment counts the public pages do not state.
-- **Rationale**: Grounding needs real topics. Copyright and the "do not invent" rule both forbid pasted pages and made-up numbers.
-- **Alternatives considered**: Live crawl on startup. Rejected by constitution principle V and by offline startup.
+- **Decision**: `app/rag/ingest.py` downloads https://www.getnet.net/ and https://www.getnet.net/en and stores the visible page text as `getnet-root.md` and `getnet-en.md`. Startup repeats that download when `GETNET_INGEST` is not `0`, and falls back to the files on disk if the fetch fails. The Brazilian topic files remain short original summaries with `title` and `url` front matter. They do not state fees or installment counts the public pages do not state.
+- **Rationale**: The brief asks the RAG pipeline to ingest those two URLs and to look for other sources. Tests and a keyless container still run from the stored files.
+- **Alternatives considered**: Summaries for the two global URLs as well. Rejected because the brief names those URLs as ingestion inputs.

@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+os.environ["GETNET_INGEST"] = "0"
 
 import pytest
 import yaml
@@ -20,6 +23,7 @@ def offline_settings() -> Settings:
         corpus_dir=base.corpus_dir,
         merchants_path=base.merchants_path,
         chroma_dir=base.chroma_dir,
+        ingest_on_start=False,
     )
 
 
