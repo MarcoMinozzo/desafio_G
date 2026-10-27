@@ -1,0 +1,1 @@
+"""Getnet Assist service."""

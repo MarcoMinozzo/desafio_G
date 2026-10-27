@@ -1,0 +1,177 @@
+openapi: 3.1.0
+info:
+  title: Getnet Assist
+  version: 1.0.0
+  description: |
+    Two routes only. Chat always returns a meaningful JSON body for a
+    well-formed request, including refusals and handoffs.
+paths:
+  /v1/chat:
+    post:
+      operationId: createChat
+      summary: Answer one merchant message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Answer, refusal, or handoff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reply"
+        "422":
+          description: Malformed JSON or user_id that fails the pattern
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+  /v1/traces/{trace_id}:
+    get:
+      operationId: getTrace
+      summary: Read one review record
+      parameters:
+        - name: trace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Review record without raw customer payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewRecord"
+        "404":
+          description: Unknown trace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      additionalProperties: false
+      required: [message, user_id]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        user_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z0-9_-]+$"
+    PublicSource:
+      type: object
+      additionalProperties: false
+      required: [title, url]
+      properties:
+        title:
+          type: string
+        url:
+          type: string
+          format: uri
+    Handoff:
+      type: object
+      additionalProperties: false
+      required: [reference, reason]
+      properties:
+        reference:
+          type: string
+          pattern: "^ESC-[A-Z0-9]{8}$"
+        reason:
+          type: string
+          enum: [human_requested, low_confidence, insufficient_sources]
+    Reply:
+      type: object
+      additionalProperties: false
+      required: [trace_id, answer, route, sources, confidence, handoff, tools_used]
+      properties:
+        trace_id:
+          type: string
+          format: uuid
+        answer:
+          type: string
+          minLength: 1
+        route:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [guardrail, router, knowledge, support, escalation]
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicSource"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        handoff:
+          oneOf:
+            - $ref: "#/components/schemas/Handoff"
+            - type: "null"
+        tools_used:
+          type: array
+          items:
+            type: string
+            enum: [get_merchant_account, get_receivables, diagnose_terminal, web_search]
+    ReviewRecord:
+      type: object
+      additionalProperties: false
+      required:
+        [trace_id, user_id, route, intent, tools, sources, retrieval_scores, outcome, confidence, handoff, latency_ms]
+      properties:
+        trace_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        route:
+          type: array
+          items:
+            type: string
+            enum: [guardrail, router, knowledge, support, escalation]
+        intent:
+          type: string
+          enum: [product_knowledge, account_support, general_web, human_handoff, out_of_scope, refused]
+        tools:
+          type: array
+          items:
+            type: string
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/PublicSource"
+        retrieval_scores:
+          type: array
+          items:
+            type: number
+        outcome:
+          type: string
+          enum: [answered, refused, handoff]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        handoff:
+          oneOf:
+            - $ref: "#/components/schemas/Handoff"
+            - type: "null"
+        latency_ms:
+          type: integer
+          minimum: 0
+    ErrorBody:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string

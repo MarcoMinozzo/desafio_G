@@ -1,0 +1,71 @@
+scenarios:
+  - id: classica-vs-smart
+    message: "What's the difference between the Get Clássica and the Get Smart?"
+    user_id: cliente1988
+    intent: product_knowledge
+    route_contains: knowledge
+    tools_contain: []
+    sources_required: true
+  - id: weather-porto-alegre
+    message: "What's the weather forecast in Porto Alegre tomorrow?"
+    user_id: cliente1988
+    intent: general_web
+    route_contains: knowledge
+    tools_contain: [web_search]
+    sources_required: false
+  - id: yesterday-deposit
+    message: "When will the money from yesterday's sales be deposited?"
+    user_id: cliente1988
+    intent: account_support
+    route_contains: support
+    tools_contain: [get_receivables]
+    sources_required: false
+  - id: pix-bank-account
+    message: "Do I need a bank account to receive my sales via Pix?"
+    user_id: cliente1988
+    intent: product_knowledge
+    route_contains: knowledge
+    tools_contain: []
+    sources_required: true
+  - id: machine-offline
+    message: "My card machine won't connect to the internet, what should I do?"
+    user_id: cliente1988
+    intent: account_support
+    route_contains: support
+    tools_contain: [diagnose_terminal]
+    sources_required: false
+  - id: antecipacao
+    message: "How does receivables advance (antecipação) work with Getnet?"
+    user_id: cliente1988
+    intent: product_knowledge
+    route_contains: knowledge
+    tools_contain: []
+    sources_required: true
+  - id: euro-rate
+    message: "What's the euro exchange rate today?"
+    user_id: cliente1988
+    intent: general_web
+    route_contains: knowledge
+    tools_contain: [web_search]
+    sources_required: false
+  - id: decline
+    message: "My card machine is showing a transaction decline error."
+    user_id: cliente1988
+    intent: account_support
+    route_contains: support
+    tools_contain: [diagnose_terminal]
+    sources_required: false
+  - id: crediario
+    message: "How many installments can I split a sale into with the crediário?"
+    user_id: cliente1988
+    intent: product_knowledge
+    route_contains: knowledge
+    tools_contain: []
+    sources_required: true
+  - id: whatsapp-link
+    message: "Can I sell through WhatsApp using the Payment Link?"
+    user_id: cliente1988
+    intent: product_knowledge
+    route_contains: knowledge
+    tools_contain: []
+    sources_required: true

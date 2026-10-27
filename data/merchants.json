@@ -1,0 +1,29 @@
+{
+  "cliente1988": {
+    "user_id": "cliente1988",
+    "legal_name": "Comercio Exemplo LTDA",
+    "machine_model": "Get Smart",
+    "pix_enabled": true,
+    "receiving_setup": "Getnet account with Pix receipt enabled in the app",
+    "receivable": {
+      "sales_label": "yesterday",
+      "amount_brl": 1840.5,
+      "expected_deposit": "next business day",
+      "status": "scheduled"
+    },
+    "terminal": {
+      "serial": "GT-1988-SMART",
+      "connectivity_steps": [
+        "Check the Wi-Fi and 4G icons on your Get Smart.",
+        "Reconnect Wi-Fi or confirm the 4G chip has a data plan.",
+        "Use the original charger and leave the terminal closed.",
+        "If it stays offline, call Getnet at 4002-4000 with serial GT-1988-SMART."
+      ],
+      "decline_steps": [
+        "Read the decline text on your Get Smart screen and retry the sale once.",
+        "Ask the customer to use another card or Pix.",
+        "If declines continue, call Getnet at 4002-4000 with serial GT-1988-SMART."
+      ]
+    }
+  }
+}
