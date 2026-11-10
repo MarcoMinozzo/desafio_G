@@ -48,7 +48,7 @@ Then read the review record:
 curl -s localhost:8000/v1/traces/<trace_id>
 ```
 
-The only routes are `POST /v1/chat` and `GET /v1/traces/{trace_id}`.
+The routes are `POST /v1/chat`, `GET /v1/traces/{trace_id}`, `GET /v1/traces/{trace_id}/check`, and `GET /v1/metrics`.
 
 ## Tests
 
@@ -86,6 +86,8 @@ POST /v1/chat
   -> GuardrailAgent
   -> RouterAgent
   -> KnowledgeAgent | SupportAgent | EscalationAgent
+  -> when the message asks for the merchant's account and a product fact,
+     SupportAgent then KnowledgeAgent
   -> Reply + ReviewRecord
 ```
 
@@ -153,9 +155,11 @@ The model does not choose tool arguments from the message. The support role pass
 
 `pytest` runs `data/evaluation.yaml` and checks intent, route, and tools. A nightly job that scores a live model is a production step, not part of this service.
 
-Each chat writes a review record: route, intent, tool names, source titles and URLs, retrieval scores, outcome, confidence, handoff, and latency. `GET /v1/traces/{trace_id}` returns it. Logs are JSON on stdout. They omit raw customer payloads.
+Each chat writes a review record: route, intent, tool names, source titles and URLs, retrieval scores, outcome, confidence, handoff, latency, and `session_id`. `GET /v1/traces/{trace_id}` returns it. Logs are JSON on stdout. They omit raw customer payloads.
 
-In production, the same fields can be exported with OpenTelemetry. Alert when the evaluation-set route accuracy drops, and when handoff volume or guardrail refusals jump. This repository does not ship a dashboard.
+A later message may send the `session_id` from the previous reply. The next turn continues only when the `user_id` is the same. The memory keeps the merchant's words and the intent. It does not keep tool values. A different `user_id` with the same `session_id` starts an empty thread.
+
+`GET /v1/metrics` returns counts for replies, outcomes, and verdicts, plus the age of the oldest corpus file. After 10 replies it logs an alert when the hallucinated share passes 0.3 or the handoff share passes 0.5. A corpus file older than 30 days raises `corpus_stale`. The snapshot has no `user_id` and no tool value. This repository does not ship a dashboard.
 
 ## Out of scope
 

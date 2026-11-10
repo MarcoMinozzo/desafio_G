@@ -1,6 +1,6 @@
 # Inventário do Getnet Assist
 
-Serviço HTTP de um processo. Um chat entra em `POST /v1/chat`, passa pelo guardrail e pelo roteador, e um especialista responde. Não há fila, worker em segundo plano nem banco de aplicação. O único estado de execução é o `TraceStore` em memória.
+Serviço HTTP de um processo. Um chat entra em `POST /v1/chat`, passa pelo guardrail e pelo roteador, e um especialista responde. Se a mesma mensagem pede a conta do lojista e um fato de produto, o suporte responde e o conhecimento responde em seguida. Não há fila, worker em segundo plano nem banco de aplicação. O estado de execução fica em três mapas na memória do processo: `TraceStore`, `SessionStore` e `MetricsStore`. Os três somem quando o processo reinicia.
 
 Não existe `app.py`. A entrada é `app/main.py`, carregada pelo Uvicorn como `app.main:app`.
 
@@ -15,25 +15,26 @@ Não existe `app.py`. A entrada é `app/main.py`, carregada pelo Uvicorn como `a
 5. `build_llm`: sem chave devolve `NullLLM`; com chave, `OpenAICompatibleClient`.
 6. `HttpWebSearch` (ou o fake injetado nos testes).
 7. `load_merchants` lê `data/merchants.json`.
-8. `build_service` instancia `GuardrailAgent`, `RouterAgent(llm)`, `KnowledgeAgent(retriever, web, llm)`, `SupportAgent(merchants)`, `EscalationAgent` e `TraceStore`, e os entrega a `ChatService`.
+8. `corpus_age_days` mede a idade do Markdown mais antigo em `data/corpus`. `build_service` instancia `GuardrailAgent`, `RouterAgent(llm)`, `KnowledgeAgent(retriever, web, llm)`, `SupportAgent(merchants)`, `EscalationAgent`, `TraceStore`, `SessionStore` e `MetricsStore`, e os entrega a `ChatService`.
 
 Não há job periódico. A ingestão é síncrona, só na subida (e via `python -m app.rag.ingest`).
 
 ## Pedido típico
 
-`POST /v1/chat` com `message` e `user_id` valida `ChatRequest` e chama `ChatService.handle`.
+`POST /v1/chat` com `message`, `user_id` e `session_id` opcional valida `ChatRequest` e chama `ChatService.handle`.
 
-1. Cria `trace_id` e um `Handoff` com a mensagem e o `user_id`.
+1. Cria `trace_id`. Se o corpo não traz `session_id`, gera um. Lê o último turno daquele par `user_id` + `session_id`, se existir, e monta o `Handoff` com a mensagem, o `user_id` e o turno anterior.
 2. `GuardrailAgent.review`. Recusa (vazio, injeção, outro cliente) encerra com `outcome=refused`.
-3. `RouterAgent.route`. O modelo, se devolver um intent válido, vence a tabela de palavras. Senão, `_table`.
+3. `RouterAgent.route`. Se a tabela vê conta e produto ao mesmo tempo, essa sequência vence. Senão, um intent válido do modelo vence a tabela. Se a tabela diz `out_of_scope` e o turno anterior deste lojista era produto, conta ou consulta geral, o turno continua o assunto anterior. Caso contrário, `_table`.
 4. Confiança do roteador abaixo de 0,45, ou pedido de pessoa: `EscalationAgent.open`.
 5. `out_of_scope`: recusa sem ferramenta.
 6. `general_web`: `KnowledgeAgent.answer_general` (clima ou câmbio; não cita Getnet).
 7. `account_support`: `SupportAgent.answer` chama uma ferramenta com o `user_id` do pedido.
-8. Caso restante, `product_knowledge`: `KnowledgeAgent.answer_product`. Sem trecho forte, escala com `insufficient_sources`.
-9. `_finish` grava `ReviewRecord` no `TraceStore` (memória e uma linha JSON de log) e devolve `Reply`.
+8. `product_knowledge`: `KnowledgeAgent.answer_product`. Sem trecho forte, escala com `insufficient_sources`, a menos que o suporte já tenha respondido na mesma volta. Nesse caso a parte de produto declara a lacuna e a resposta da conta permanece.
+9. Numa sequência, os passos 7 e 8 rodam os dois, nesta ordem. As respostas são juntadas por uma linha em branco.
+10. `_finish` monta o `Reply` primeiro. `evaluate` mede as afirmações com os dados que a volta já tem. O `ReviewRecord` vai para o `TraceStore` (memória e uma linha JSON). O turno vai para o `SessionStore`. O `MetricsStore` conta o desfecho e o veredito.
 
-`GET /v1/traces/{trace_id}` lê esse registro. `user_id` inválido no corpo vira 422.
+`GET /v1/traces/{trace_id}` lê o registro completo. `GET /v1/traces/{trace_id}/check` lê só o veredito. `GET /v1/metrics` lê os contadores. `user_id` ou `session_id` inválido no corpo vira 422. Um `session_id` de outro `user_id` não abre o fio alheio: a chave é o par.
 
 ## Fluxo de uma pergunta de produto
 
@@ -44,7 +45,7 @@ Pergunta → `retriever.search(message, k=3)` → até três `Hit`.
 
 Cada documento do corpus já é um vetor (ou um documento BM25). Não há corte de PDF nem de parágrafo. O texto embutido é `título + "\n" + corpo`.
 
-Depois do search: ficam trechos com nota ≥ `MIN_SCORE` (0,15). O corte relativo é 94% da melhor nota e só descarta trechos piores; o melhor sempre permanece. Se `strong` fica vazio, confiança fixa 0,2 e handoff. Se há trechos, `_prompt` junta título, URL e texto com `"\n\n".join` e uma única chamada `llm.answer(PRODUCT_SYSTEM, prompt)`. Sem texto do modelo, a resposta é o extrato dos mesmos trechos. Confiança = `min(0,95, nota do melhor trecho)`. Trechos removidos não entram nessa conta. O resultado é um `KnowledgeResult`.
+Depois do search: ficam trechos com nota ≥ `MIN_SCORE` (0,15). O corte relativo é 94% da melhor nota e só descarta trechos piores; o melhor sempre permanece. Todas as passagens recuperadas, inclusive as descartadas, seguem como `RetrievedPassage` para o check de âncora. Se `strong` fica vazio, confiança fixa 0,2, sem claims, e handoff. Se há trechos, `_prompt` junta título, URL e texto com `"\n\n".join` e uma única chamada `llm.answer(PRODUCT_SYSTEM, prompt)`. Sem texto do modelo, a resposta é o extrato dos trechos mantidos e há uma claim por passagem, citando a URL. Com JSON válido `{"answer", "claims"}`, as claims são as do modelo. Com prosa, a lista fica vazia: o serviço não varre o texto para inventar citação. Confiança = `min(0,95, nota do melhor trecho)`. Trechos removidos não entram nessa conta. O resultado é um `KnowledgeResult`, com o nome do retriever (`bm25` ou `chroma`).
 
 `answer_general` não busca no corpus nem chama o modelo: `web.lookup`. Sem texto, confiança 0,35; com texto, 0,8.
 
@@ -64,13 +65,16 @@ Pacote raiz. Sem símbolos.
 
 Superfície HTTP e montagem do processo.
 
-- `create_app`: sobe ingestão, corpus, retriever, LLM, web, serviço e as rotas.
+- `create_app`: sobe ingestão, corpus, retriever, LLM, web, idade do corpus, serviço e as rotas.
 - `invalid_request`: 422 em corpo inválido.
+- `load_trace`: exige UUID e registro existente; senão 404.
 - `create_chat`: `POST /v1/chat` → `service.handle`.
+- `read_metrics`: `GET /v1/metrics`.
+- `read_check`: `GET /v1/traces/{trace_id}/check`.
 - `read_trace`: `GET /v1/traces/{trace_id}`.
 - `app`: instância criada na importação.
 
-Importa de: `config`, `domain.models`, `llm.client`, `orchestration.service`, `rag.corpus`, `rag.ingest`, `rag.retriever`, `tools.store`, `tools.web_search`.
+Importa de: `config`, `domain.models`, `llm.client`, `observability.metrics`, `orchestration.service`, `rag.corpus`, `rag.ingest`, `rag.retriever`, `tools.store`, `tools.web_search`.
 
 Quem chama: Uvicorn; `tests/conftest.py`; `tests/test_orchestration.py`.
 
@@ -92,16 +96,19 @@ Pacote. Sem símbolos.
 
 ### `app/domain/models.py`
 
-Contrato Pydantic das duas rotas.
+Contrato Pydantic do chat, do registro de revisão, da leitura do check e do snapshot de métricas.
 
-- Literais: `RouteName`, `ToolName`, `IntentName`, `OutcomeName`, `HandoffReason`.
+- Literais: `RouteName`, `ToolName`, `IntentName`, `OutcomeName`, `HandoffReason`, `ClaimKind`, `CheckName`, `CheckStatus`, `VerdictName`, `RetrieverName`.
 - `PublicSource`: título e URL citados.
 - `Handoff`: recibo `ESC-` + 8 caracteres e o motivo.
-- `ChatRequest`: `message` e `user_id`.
-- `Reply`: resposta ao cliente.
-- `ReviewRecord`: visão do operador, sem payload bruto.
+- `ChatRequest`: `message`, `user_id` e `session_id` opcional.
+- `Reply`: resposta ao cliente, com `session_id`. Não leva veredito.
+- `ClaimedStatement`, `SourceEvidence`, `ToolEvidence`, `CheckResult`: afirmação, evidência e um check.
+- `ReviewRecord`: visão do operador, sem payload bruto. Inclui claims, evidência, checks, veredito e `session_id`.
+- `CheckResponse`: só `trace_id`, veredito, confiança do veredito e os três checks.
+- `MetricsSnapshot`: contagens, idade do corpus e nomes de alerta. Sem `user_id` e sem valor de ferramenta.
 
-Quem chama: `main`, `service`, `escalation`, `knowledge` (`PublicSource`), `traces`. Não importa outros módulos do projeto.
+Quem chama: `main`, `service`, `escalation`, `knowledge`, `support`, `hallucination_check`, `metrics`, `traces`. Não importa outros módulos do projeto.
 
 ## app/llm/
 
@@ -135,17 +142,27 @@ Pacote. Sem símbolos.
 
 Quem chama: `service`, `guardrail`, `router`, `knowledge`, `support`. Não confundir com `domain.models.Handoff`, que é o recibo ao cliente.
 
+### `app/orchestration/sessions.py`
+
+Memória do fio, só no processo. A chave é `(user_id, session_id)`.
+
+- `MemoryTurn`: mensagem do lojista, intent, detalhe e `topic`. O `topic` é a pergunta que a busca deve repetir num seguimento. Não há valor de ferramenta.
+- `SessionStore.latest`: último turno daquele par, ou nada.
+- `SessionStore.remember`: guarda no máximo quatro turnos.
+
+Quem chama: `ChatService`. Um `session_id` apresentado por outro `user_id` não encontra o fio.
+
 ### `app/orchestration/service.py`
 
-Dono do fluxo. Um especialista depois do guardrail e do roteador.
+Dono do fluxo. O roteador pode mandar o suporte e depois o conhecimento na mesma volta.
 
 - `_REFUSALS`: textos de recusa.
-- `ChatService.handle`: sequência descrita acima.
+- `ChatService.handle`: sequência descrita acima. Num seguimento, a busca usa o `topic` anterior, não o fragmento novo.
 - `ChatService._escalate`: abre handoff e finaliza.
-- `ChatService._finish`: monta `Reply`, grava o traço, mede latência.
-- `build_service`: liga os cinco agentes e o store.
+- `ChatService._finish`: monta o `Reply`, chama `evaluate`, grava o traço, lembra o turno e conta a métrica.
+- `build_service`: liga os cinco agentes, o traço, a sessão e as métricas.
 
-Importa os cinco agentes, modelos, `LLMClient`, `TraceStore`, os dois `Handoff`, os retrievers e `WebSearch`. Quem chama: `main.create_app`.
+Importa os cinco agentes, modelos, `LLMClient`, `evaluate`, `MetricsStore`, `TraceStore`, `MemoryTurn`, `SessionStore`, os dois `Handoff`, os retrievers e `WebSearch`. Quem chama: `main.create_app`.
 
 ## app/agents/
 
@@ -165,12 +182,12 @@ Importa `orchestration.handoff.Handoff`. Quem chama: `service`; `tests/test_guar
 
 ### `app/agents/router.py`
 
-Escolhe o intent. Um intent válido do modelo substitui a tabela.
+Escolhe o intent. Pedido de pessoa, clima e câmbio continuam exclusivos. Conta e produto são sinais independentes: se os dois aparecem, a sequência é suporte e depois conhecimento, e essa sequência vence o modelo.
 
 - `ALLOWED`: os cinco intents.
-- `RouteDecision`: intent, detalhe, confiança.
-- `RouterAgent.route`: tenta `llm.classify` e cai em `_table`.
-- `_table`, `_detail`, `_fold`, `_contains`: regras por palavra.
+- `RouteDecision`: intent, detalhe, confiança, `sequence` e `continued`. `steps` devolve a sequência, ou o intent sozinho.
+- `RouterAgent.route`: sequência dupla da tabela, senão `llm.classify`, senão continuação do turno anterior, senão `_table`.
+- `_table`, `_account`, `_product`, `_continue`, `_detail`, `_fold`, `_contains`.
 
 Importa `LLMClient` e `Handoff`. Quem chama: `service`.
 
@@ -178,22 +195,24 @@ Importa `LLMClient` e `Handoff`. Quem chama: `service`.
 
 Resposta de produto a partir do corpus, e consulta geral que não cita página da Getnet.
 
-- `PRODUCT_SYSTEM`: instrução do modelo para não inventar fora dos trechos.
-- `KnowledgeResult`: resposta, confiança, fontes, ferramentas, notas, `insufficient`.
-- `KnowledgeAgent.answer_product`: busca, corte, prompt único, LLM ou extrato.
-- `KnowledgeAgent.answer_general`: `web.lookup`.
+- `PRODUCT_SYSTEM`: pede JSON com `answer` e `claims`. Cada citação é uma URL dos trechos.
+- `KnowledgeResult`: resposta, confiança, fontes, ferramentas, notas, `insufficient`, claims, passagens recuperadas e nome do retriever.
+- `KnowledgeAgent.answer_product`: busca, corte, prompt único, claims do modelo, do extrato, ou lista vazia se a resposta for prosa.
+- `KnowledgeAgent.answer_general`: `web.lookup`. Não emite claim.
 - `_prompt`: junta a pergunta e os trechos numa string.
+- `_claims_from_model`: lê o JSON. Prosa não vira citação.
 
-Importa `PublicSource`, `LLMClient`, `Handoff`, tipos do retriever e `WebSearch`. Quem chama: `service` (`answer_product` e `answer_general`). `_prompt` só é avaliada como argumento de `llm.answer` na linha do produto; um `NullLLM` ainda recebe o texto e não chama modelo.
+Importa `ClaimedStatement`, `PublicSource`, `LLMClient`, `RetrievedPassage`, `Handoff`, tipos do retriever e `WebSearch`. Quem chama: `service` (`answer_product` e `answer_general`). `_prompt` só é avaliada como argumento de `llm.answer` na linha do produto; um `NullLLM` ainda recebe o texto e não chama modelo.
 
 ### `app/agents/support.py`
 
 Conta do lojista. Toda ferramenta recebe o `user_id` do pedido.
 
-- `SupportResult`.
+- `SupportResult`: resposta, confiança, ferramentas, claims, `stated` e `payload`. O valor fica em `stated` e em `payload`, só na memória da volta.
 - `SupportAgent.answer`: despacha por `detail` para `_receivables`, `_profile` ou `_terminal`.
+- `SupportAgent._result`: uma `ClaimedStatement` de suporte por campo afirmado. A citação é o nome da ferramenta. O texto da claim fica vazio.
 
-Importa `Handoff` e as três ferramentas. Quem chama: `service`.
+Importa `ClaimedStatement`, `StatedField`, `Handoff` e as três ferramentas. Quem chama: `service`.
 
 ### `app/agents/escalation.py`
 
@@ -236,8 +255,8 @@ Busca lexical, com Chroma opcional quando há chave.
 - `MIN_SCORE` = 0,15.
 - `_STOPWORDS`.
 - `Hit`: um trecho com nota.
-- `BM25Retriever.search`: Okapi e `value / (value + 1)`.
-- `ChromaRetriever`: cliente persistente em `data/.chroma`, coleção única `getnet-corpus`, embeddings `text-embedding-3-small` de título e corpo, `upsert` na construção, `query` na busca, nota `1 / (1 + distance)`.
+- `BM25Retriever`: `name = "bm25"`. `search` usa Okapi e `value / (value + 1)`.
+- `ChromaRetriever`: `name = "chroma"`. Cliente persistente em `data/.chroma`, coleção única `getnet-corpus`, embeddings `text-embedding-3-small` de título e corpo, `upsert` na construção, `query` na busca, nota `1 / (1 + distance)`.
 - `build_retriever`: BM25, ou Chroma se a chave existir e a criação não falhar.
 - `tokenize`: letras e números, sem acento e sem stopword. Símbolo de fórmula some.
 
@@ -298,31 +317,57 @@ Pacote. Sem símbolos.
 
 ### `app/observability/traces.py`
 
-- `TraceStore.put`: guarda o `ReviewRecord` e escreve uma linha JSON.
+- `TraceStore.put`: guarda o `ReviewRecord` inteiro, inclusive claims, evidência, checks e veredito, e escreve uma linha JSON no logger `getnet.assist`.
 - `TraceStore.get`.
 
-Importa `ReviewRecord`. Quem chama: `build_service` e `ChatService._finish`; a rota de trace lê `service.traces`.
+Importa `ReviewRecord`. Quem chama: `build_service` e `ChatService._finish`; as rotas de trace e de check leem `service.traces`.
+
+### `app/observability/hallucination_check.py`
+
+Três checks mecânicos sobre dados que a resposta já tem. Não grava valor de ferramenta.
+
+- `KEEP_RATIO` = 0,94. A barra absoluta continua `MIN_SCORE` (0,15).
+- `RetrievedPassage`, `StatedField`, `HallucinationReport`.
+- `evaluate`: evidência, `anchor`, `tool_payload`, `structured_output`, veredito e `verdict_confidence`.
+- `_anchor`, `_tool_payload`, `_structured`, `_source_evidence`, `_tool_evidence`, `_verdict`.
+
+Quem chama: `ChatService._finish`. `knowledge` usa `RetrievedPassage`. `support` usa `StatedField`.
+
+### `app/observability/metrics.py`
+
+Contadores e alertas. O snapshot não tem `user_id` nem valor de ferramenta.
+
+- `MIN_SAMPLE` = 10, `HALLUCINATED_RATIO` = 0,3, `HANDOFF_RATIO` = 0,5, `CORPUS_MAX_AGE_DAYS` = 30.
+- `MetricsStore.record`: soma pedido, desfecho e veredito, e emite alerta novo.
+- `MetricsStore.alerts` e `snapshot`.
+- `corpus_age_days`: idade, em dias, do `*.md` mais antigo do corpus. Diretório vazio vale 0.
+- Logger `getnet.assist.metrics`. Um aviso JSON quando `corpus_stale`, `hallucinated_ratio` ou `handoff_ratio` passa a valer. O mesmo alerta não se repete no processo.
+
+Quem chama: `main.create_app` (idade e store) e `ChatService._finish` (`record`). A rota de métricas lê `service.metrics`.
 
 ## tests/
 
 Sem rede e sem modelo pago, via `create_app` com `FakeWebSearch` e settings offline.
 
 - `conftest.py`: `offline_settings`, `client` (`TestClient`), `scenarios` (lê `data/evaluation.yaml`).
-- `test_contract.py`: forma do chat, trace desconhecido, `user_id` inválido, trace sem payload do cliente.
+- `test_contract.py`: forma do chat, inclusive `session_id`, trace desconhecido, `user_id` inválido, trace sem payload do cliente.
 - `test_guardrail.py`: vazio, injeção, outro cliente, tema fora de escopo, e o agente direto.
 - `test_orchestration.py`: depósito, usuário desconhecido, maquininha, ferramentas que ignoram id no texto, perfil, handoff humano, intent do `FakeLLM` vencendo a tabela.
 - `test_evaluation.py`: os cenários do YAML batem com especialista e ferramenta; perguntas gerais não citam Getnet.
 - `test_retrieval.py`: antecipação e link de pagamento acertam o Markdown certo, só BM25.
 - `test_ingest.py`: extração de HTML e presença das duas URLs no corpus.
+- `test_hallucination.py`: passa e falha de âncora, payload e saída estruturada, rota de check enxuta, valor de venda ausente do registro, recusa e consulta geral `unverified`, id desconhecido.
+- `test_improvements.py`: pergunta mista roda suporte e depois conhecimento, seguimento no mesmo `user_id`, outro `user_id` não herda o assunto, snapshot sem dado de cliente, alertas de razão e corpus velho.
 
 ## Outros arquivos de fonte
 
 - `pyproject.toml`: pacote `getnet-assist`, dependências de runtime e extra opcional `llm` (`openai`, `chromadb`).
-- `data/corpus/*.md`: nove resumos públicos. Um arquivo, um documento de busca.
+- `data/corpus/*.md`: sete resumos públicos e os dois Markdown baixados de `getnet.net` e `getnet.net/en`. Um arquivo, um documento de busca.
 - `data/merchants.json`: fixture, não conta ao vivo.
-- `data/evaluation.yaml`: dez cenários oficiais.
-- `specs/001-agent-orchestration/`: spec, plano, modelo de dados, tarefas, quickstart, contrato OpenAPI. Não é importado pelo serviço.
-- `.specify/`: memória e templates do Spec Kit, inclusive a constituição.
+- `data/evaluation.yaml`: dez cenários oficiais. Cada um continua com um especialista.
+- `specs/001-agent-orchestration/`: spec da orquestração, plano, modelo de dados, tarefas, quickstart e o contrato OpenAPI, que também descreve o check, a sessão e as métricas. Não é importado pelo serviço.
+- `specs/002-hallucination-detection/`: spec do veredito e o checklist de qualidade. Não é importado pelo serviço.
+- `.specify/`: memória e templates do Spec Kit. A constituição está na versão 1.2.0.
 
 ## Quem chama quem
 
@@ -336,21 +381,30 @@ uvicorn app.main:app
     build_llm
     HttpWebSearch
     load_merchants
+    corpus_age_days
     build_service
       GuardrailAgent, RouterAgent, KnowledgeAgent,
-      SupportAgent, EscalationAgent, TraceStore
+      SupportAgent, EscalationAgent, TraceStore,
+      SessionStore, MetricsStore
   POST /v1/chat
     ChatService.handle
+      SessionStore.latest
       GuardrailAgent.review
       RouterAgent.route
-        llm.classify | _table
+        _table (sequência) | llm.classify | _continue
       KnowledgeAgent.answer_product
         retriever.search
-        _prompt + llm.answer       (ou extrato)
+        _prompt + llm.answer       (ou extrato, ou claims do JSON)
       KnowledgeAgent.answer_general
         web.lookup
       SupportAgent.answer
         get_receivables | get_merchant_account | diagnose_terminal
       EscalationAgent.open
+      evaluate
       TraceStore.put
+      SessionStore.remember
+      MetricsStore.record
+  GET /v1/traces/{trace_id}
+  GET /v1/traces/{trace_id}/check
+  GET /v1/metrics
 ```

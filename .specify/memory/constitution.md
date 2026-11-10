@@ -1,9 +1,9 @@
 <!--
 Sync Impact Report
-- Version change: unratified template → 1.0.0
-- Modified principles: placeholders replaced by the five Getnet Assist principles
-- Added sections: Delivery Constraints, Quality Gates
-- Removed sections: none (template slots filled)
+- Version change: 1.1.0 → 1.2.0
+- Modified principles: V. No Extra Surface (expanded; title unchanged)
+- Added sections: none
+- Removed sections: none
 - Follow-up TODOs: none
 -->
 
@@ -51,13 +51,23 @@ multi-service platform.
 
 ### V. No Extra Surface
 
-The core MUST expose only `POST /v1/chat` and `GET /v1/traces/{trace_id}`.
-Work outside that contract — live CRM, private Getnet APIs, runtime crawl,
-login, fine-tuning, and a dashboard — is out of scope until the constitution
-is amended.
+The core MUST expose only `POST /v1/chat`, `GET /v1/traces/{trace_id}`,
+`GET /v1/traces/{trace_id}/check`, and `GET /v1/metrics`. The review record
+for a reply MAY include `claimed_statements`, `evidence`, `check_results`,
+`verdict`, `verdict_confidence`, and `session_id`, and every reply MUST be
+markable with those check results. The check route returns only the verdict,
+its confidence, and the check results. The metrics route returns only
+aggregate counts, corpus age, and alert names. A chat MAY carry a
+`session_id` so a later turn from the same `user_id` can continue that
+thread. The session store MUST NOT keep tool values and MUST NOT open a
+thread for a different `user_id`. Work outside that contract — live CRM,
+private Getnet APIs, runtime crawl, login, fine-tuning, and a dashboard — is
+out of scope until the constitution is amended.
 
-Rationale: screen time for the core is capped, and extra surface competes
-with the orchestration the brief asks for.
+Rationale: the check reads the trace the service already keeps, and the
+metrics read is the same kind of operator view in aggregate. Session memory
+stays inside the process and inside the caller's `user_id`. Anything beyond
+that still competes with the orchestration the brief asks for.
 
 ## Delivery Constraints
 
@@ -101,4 +111,4 @@ Reviews MUST verify grounded answers, `user_id` isolation, fake-LLM tests,
 single-container run, and the allowed HTTP surface. Complexity beyond the
 in-process handoff MUST be justified against Principle V.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-24 | **Last Amended**: 2026-10-24
+**Version**: 1.2.0 | **Ratified**: 2026-10-24 | **Last Amended**: 2026-11-10

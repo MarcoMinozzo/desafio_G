@@ -1,4 +1,9 @@
-"""In-memory review records and one JSON log line per chat."""
+"""In-memory review records and one JSON log line per chat.
+
+The stored record includes claimed statements, evidence, check results, and
+the verdict. Tool values are not part of that record. The map is empty after
+a process restart.
+"""
 
 from __future__ import annotations
 

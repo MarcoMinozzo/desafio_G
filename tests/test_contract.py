@@ -8,7 +8,17 @@ def test_chat_contract_and_unknown_trace(client) -> None:
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"trace_id", "answer", "route", "sources", "confidence", "handoff", "tools_used"}
+    assert set(body) == {
+        "trace_id",
+        "answer",
+        "route",
+        "sources",
+        "confidence",
+        "handoff",
+        "tools_used",
+        "session_id",
+    }
+    assert body["session_id"]
     assert body["route"][0] == "guardrail"
     assert body["sources"]
     assert body["handoff"] is None

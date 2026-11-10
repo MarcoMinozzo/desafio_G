@@ -60,6 +60,8 @@ class Hit:
 
 
 class BM25Retriever:
+    name = "bm25"
+
     def __init__(self, documents: list[CorpusDocument]) -> None:
         self.documents = documents
         tokenized = [tokenize(f"{doc.title}\n{doc.body}") for doc in documents]
@@ -91,6 +93,8 @@ class BM25Retriever:
 
 class ChromaRetriever:
     """Used only when OPENAI_API_KEY is set and chromadb imports."""
+
+    name = "chroma"
 
     def __init__(self, documents: list[CorpusDocument], settings: Settings) -> None:
         import chromadb
